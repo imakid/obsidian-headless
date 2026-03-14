@@ -2,6 +2,16 @@
 name: obsidian-headless
 description: 在无显示器/无 GUI 环境下通过自然语言指令管理 Obsidian 笔记仓库。支持创建笔记、删除笔记（带确认）、搜索标题、搜索内容、模糊搜索、创建日记等功能。当用户需要在无头服务器、SSH 环境、或没有安装 Obsidian 桌面应用的情况下管理 Obsidian 笔记时使用此技能。触发词包括"obsidian", "笔记", "搜索笔记", "创建笔记", "删除笔记", "今天日记", "无头 obsidian", "命令行 obsidian"。
 slash_commands:
+  - name: obsidian-headless
+    description: 主命令 - 无头 Obsidian 笔记管理
+    usage: /obsidian-headless [子命令] [参数]
+    subcommands:
+      - create: 创建新笔记 (/obsidian-headless create 文件名 内容)
+      - delete: 删除笔记 (/obsidian-headless delete 文件名)
+      - search: 搜索笔记 (/obsidian-headless search 关键词)
+      - daily: 今天日记 (/obsidian-headless daily 内容)
+      - list: 列出所有笔记 (/obsidian-headless list)
+      - save: 保存内容 (/obsidian-headless save 文件名 内容)
   - name: obs-create
     description: 创建新笔记
     usage: /obs-create [文件名] [内容]

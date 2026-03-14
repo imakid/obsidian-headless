@@ -763,13 +763,53 @@ save_content() {
 parse_command() {
     local input="$1"
     
-    # 检查是否以斜杠命令开头（/obs-xxx）
-    if [[ "$input" == /obs-* ]]; then
+    # 检查是否以斜杠命令开头（/obs-xxx 或 /obsidian-headless）
+    if [[ "$input" == /obs-* ]] || [[ "$input" == /obsidian-headless* ]]; then
         # 处理斜杠命令
         local cmd=$(echo "$input" | awk '{print $1}')
         local args=$(echo "$input" | cut -d' ' -f2-)
         
         case "$cmd" in
+            /obsidian-headless)
+                # 主命令，需要解析子命令
+                local subcmd=$(echo "$args" | awk '{print $1}')
+                local subargs=$(echo "$args" | cut -d' ' -f2-)
+                
+                case "$subcmd" in
+                    create)
+                        local title=$(echo "$subargs" | awk '{print $1}')
+                        local content=$(echo "$subargs" | cut -d' ' -f2-)
+                        create_note "$title" "$content"
+                        ;;
+                    delete)
+                        delete_note "$subargs"
+                        ;;
+                    search)
+                        search_content "$subargs"
+                        ;;
+                    daily)
+                        daily_note "$subargs"
+                        ;;
+                    list)
+                        list_all
+                        ;;
+                    save)
+                        local target=$(echo "$subargs" | awk '{print $1}')
+                        local content=$(echo "$subargs" | cut -d' ' -f2-)
+                        if [[ -n "$content" ]]; then
+                            save_content "$target" "$content"
+                        else
+                            save_conversation "$target"
+                        fi
+                        ;;
+                    *)
+                        printf '%b错误: 未知子命令 "%s"%b\n' "$RED" "$subcmd" "$NC" >&2
+                        printf '可用子命令: create, delete, search, daily, list, save\n' >&2
+                        return 1
+                        ;;
+                esac
+                return 0
+                ;;
             /obs-create)
                 local title=$(echo "$args" | awk '{print $1}')
                 local content=$(echo "$args" | cut -d' ' -f2-)
