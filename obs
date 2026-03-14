@@ -1,0 +1,6 @@
+#!/bin/bash
+# obs - Obsidian Headless 便捷入口
+# 用法: obs "自然语言指令"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$SCRIPT_DIR/bin/obsidian-headless.sh" "$@"
