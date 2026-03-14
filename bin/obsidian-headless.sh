@@ -161,7 +161,9 @@ Obsidian Headless - 无头 Obsidian 自然语言控制工具
 
 在无显示器/无 GUI 环境下管理 Obsidian 笔记仓库
 
-支持的指令格式（obs 前缀可选，大小写不敏感）:
+支持的指令格式:
+
+1. obs 前缀格式（大小写不敏感）:
   obs创建笔记 [文件名] [内容]     或  obs 创建笔记 / obs-创建笔记 / OBS创建笔记
   obs删除笔记 [文件名]            或  obs 删除笔记 / obs-删除笔记
   obs查看笔记 [文件名]            或  obs 查看笔记 / obs-查看笔记
@@ -169,10 +171,19 @@ Obsidian Headless - 无头 Obsidian 自然语言控制工具
   obs搜索内容 [关键词]            或  obs 搜索内容 / obs-搜索内容
   obs模糊搜索 [关键词]            或  obs 模糊搜索 / obs-模糊搜索
   obs今天日记 [可选内容]          或  obs 今天日记 / obs-今天日记
+  obs保存对话 [文件名] [内容]     或  obs 保存对话 / obs-保存内容
   obs列出所有                     或  obs 列出所有 / obs-列出所有
   obs列出文件夹                   或  obs 列出文件夹 / obs-列出文件夹
   obs最近笔记                     或  obs 最近笔记 / obs-最近笔记
   obs修改库路径                   或  obs 修改库路径 / obs-修改库路径
+
+2. 斜杠命令格式（Slash Commands）:
+  /obs-create [文件名] [内容]     - 创建新笔记
+  /obs-delete [文件名]            - 删除笔记
+  /obs-search [关键词]            - 搜索笔记内容
+  /obs-daily [可选内容]           - 创建/查看今天日记
+  /obs-list                       - 列出所有笔记
+  /obs-save [文件名] [内容]       - 保存对话内容到笔记
 
 配置方式（优先级从高到低）:
   1. 环境变量 OBSIDIAN_VAULT
@@ -185,7 +196,13 @@ Obsidian Headless - 无头 Obsidian 自然语言控制工具
   OBS-模糊搜索 openclaw
   obs今天日记
   obs 删除笔记 旧笔记
+  obs保存对话 对话记录 刚才讨论的内容...
   obs-修改库路径
+  
+  # 斜杠命令示例
+  /obs-create 新笔记 这是内容
+  /obs-search 关键词
+  /obs-daily 今天完成了...
 EOF
 }
 
@@ -632,10 +649,161 @@ change_vault_path() {
     done
 }
 
+# 保存对话内容到笔记
+save_conversation() {
+    local target_file="$1"
+    local conversation_content="${2:-}"
+    
+    if [[ -z "$target_file" ]]; then
+        printf '%b错误: 需要指定目标文件名%b\n' "$RED" "$NC" >&2
+        return 1
+    fi
+    
+    # 验证文件名
+    if ! validate_filename "$target_file"; then
+        return 1
+    fi
+    
+    # 添加 .md 后缀（如果没有）
+    [[ "$target_file" != *.md ]] && target_file="${target_file}.md"
+    
+    local filepath="${VAULT_PATH}/${target_file}"
+    
+    # 验证路径在仓库内
+    if ! validate_path_in_vault "$filepath"; then
+        return 1
+    fi
+    
+    # 创建目录（如果不存在）
+    mkdir -p "$(dirname "$filepath")"
+    
+    # 如果没有提供内容，尝试从内存文件读取最近的对话
+    if [[ -z "$conversation_content" ]]; then
+        printf '%b提示: 正在尝试读取最近对话内容...%b\n' "$YELLOW" "$NC" >&2
+        
+        # 尝试读取今日记忆文件中的内容
+        local today=$(date +%Y-%m-%d)
+        local memory_file="${HOME}/.openclaw/workspace-general/memory/${today}.md"
+        
+        if [[ -f "$memory_file" ]]; then
+            # 提取最后几条记录（最近 50 行）
+            conversation_content=$(tail -50 "$memory_file")
+            printf '%b已从今日记忆文件提取内容%b\n' "$GREEN" "$NC" >&2
+        else
+            printf '%b警告: 未找到今日记忆文件，将创建空笔记%b\n' "$YELLOW" "$NC" >&2
+            conversation_content="# 对话记录\n\n（未找到具体内容）"
+        fi
+    fi
+    
+    # 检查文件是否已存在
+    if [[ -f "$filepath" ]]; then
+        # 追加模式
+        printf '\n\n---\n\n%s' "$conversation_content" >> "$filepath"
+        printf '%b✓ 已追加对话内容到: %s%b\n' "$GREEN" "$target_file" "$NC"
+    else
+        # 创建新文件
+        printf '# 对话记录\n\n%s' "$conversation_content" > "$filepath"
+        printf '%b✓ 已保存对话内容到: %s%b\n' "$GREEN" "$target_file" "$NC"
+    fi
+    
+    echo "  路径: $filepath"
+}
+
+# 保存指定内容到笔记（通用转存功能）
+save_content() {
+    local target_file="$1"
+    shift  # 移除第一个参数（文件名），剩下的是内容
+    local content="$*"
+    
+    if [[ -z "$target_file" ]]; then
+        printf '%b错误: 需要指定目标文件名%b\n' "$RED" "$NC" >&2
+        return 1
+    fi
+    
+    if [[ -z "$content" ]]; then
+        printf '%b错误: 需要指定要保存的内容%b\n' "$RED" "$NC" >&2
+        return 1
+    fi
+    
+    # 验证文件名
+    if ! validate_filename "$target_file"; then
+        return 1
+    fi
+    
+    # 添加 .md 后缀（如果没有）
+    [[ "$target_file" != *.md ]] && target_file="${target_file}.md"
+    
+    local filepath="${VAULT_PATH}/${target_file}"
+    
+    # 验证路径在仓库内
+    if ! validate_path_in_vault "$filepath"; then
+        return 1
+    fi
+    
+    # 创建目录（如果不存在）
+    mkdir -p "$(dirname "$filepath")"
+    
+    # 检查文件是否已存在
+    if [[ -f "$filepath" ]]; then
+        # 追加模式
+        printf '\n\n%s' "$content" >> "$filepath"
+        printf '%b✓ 已追加内容到: %s%b\n' "$GREEN" "$target_file" "$NC"
+    else
+        # 创建新文件
+        printf '%s' "$content" > "$filepath"
+        printf '%b✓ 已保存内容到: %s%b\n' "$GREEN" "$target_file" "$NC"
+    fi
+    
+    echo "  路径: $filepath"
+}
+
 # 解析自然语言指令
 # 支持的格式: obs创建笔记, obs 创建笔记, obs-创建笔记, OBS创建笔记 等
+# 也支持斜杠命令: /obs-create, /obs-delete, /obs-search 等
 parse_command() {
     local input="$1"
+    
+    # 检查是否以斜杠命令开头（/obs-xxx）
+    if [[ "$input" == /obs-* ]]; then
+        # 处理斜杠命令
+        local cmd=$(echo "$input" | awk '{print $1}')
+        local args=$(echo "$input" | cut -d' ' -f2-)
+        
+        case "$cmd" in
+            /obs-create)
+                local title=$(echo "$args" | awk '{print $1}')
+                local content=$(echo "$args" | cut -d' ' -f2-)
+                create_note "$title" "$content"
+                return 0
+                ;;
+            /obs-delete)
+                delete_note "$args"
+                return 0
+                ;;
+            /obs-search)
+                search_content "$args"
+                return 0
+                ;;
+            /obs-daily)
+                daily_note "$args"
+                return 0
+                ;;
+            /obs-list)
+                list_all
+                return 0
+                ;;
+            /obs-save)
+                local target=$(echo "$args" | awk '{print $1}')
+                local content=$(echo "$args" | cut -d' ' -f2-)
+                if [[ -n "$content" ]]; then
+                    save_content "$target" "$content"
+                else
+                    save_conversation "$target"
+                fi
+                return 0
+                ;;
+        esac
+    fi
     
     # 检查是否以 obs 开头（大小写不敏感）
     # 支持格式: obs指令, obs 指令, obs-指令, OBS指令 等
@@ -751,6 +919,27 @@ ${other_lines}"
         # 最近笔记
         最近笔记|最近修改)
             recent_notes
+            ;;
+            
+        # 保存对话内容
+        保存对话*|转存对话*|保存内容*|转存内容*)
+            local rest="${input#*对话}"
+            rest=$(echo "$rest" | sed 's/^[[:space:]]*//')
+            # 如果还有"内容"字样，也去掉
+            rest=$(echo "$rest" | sed 's/^内容//;s/^[[:space:]]*//')
+            
+            # 获取文件名（第一个词）
+            local target_file=$(echo "$rest" | awk '{print $1}')
+            # 获取内容（文件名之后的所有内容）
+            local content=$(echo "$rest" | cut -d' ' -f2-)
+            
+            if [[ -n "$content" ]]; then
+                # 如果提供了内容，使用 save_content
+                save_content "$target_file" "$content"
+            else
+                # 如果没有提供内容，使用 save_conversation 从内存读取
+                save_conversation "$target_file"
+            fi
             ;;
             
         # 修改库路径
