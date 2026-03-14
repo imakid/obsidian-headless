@@ -329,9 +329,59 @@ find_note() {
 delete_note() {
     local title="$1"
     
+    # 如果没有提供标题，显示交互式列表
     if [[ -z "$title" ]]; then
-        echo -e "${RED}错误: 需要提供笔记标题${NC}"
-        return 1
+        local all_notes=$(find "$VAULT_PATH" -name "*.md" -type f 2>/dev/null | sort)
+        if [[ -z "$all_notes" ]]; then
+            echo -e "${RED}仓库中没有笔记${NC}"
+            return 1
+        fi
+        
+        echo -e "${YELLOW}请选择要删除的笔记:${NC}"
+        
+        # 显示带详细信息的列表
+        local i=1
+        local note_array=()
+        while IFS= read -r filepath; do
+            note_array+=("$filepath")
+            local basename=$(basename "$filepath" .md)
+            local dir=$(dirname "$filepath" | sed "s|${VAULT_PATH}/||")
+            local lines=$(wc -l < "$filepath")
+            
+            echo "  [$i] $basename"
+            echo "      位置: $dir/"
+            echo "      大小: $lines 行"
+            echo
+            
+            ((i++))
+        done <<< "$all_notes"
+        
+        echo
+        read -p "请输入编号 (1-${#note_array[@]}, 0取消): " selection
+        
+        if [[ "$selection" == "0" ]] || [[ -z "$selection" ]]; then
+            echo "已取消"
+            return 0
+        fi
+        
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -lt $i ]]; then
+            local filepath="${note_array[$((selection-1))]}"
+            local basename=$(basename "$filepath" .md)
+            
+            echo
+            echo -e "${YELLOW}即将删除笔记: $basename${NC}"
+            read -p "确认删除? (y/N): " confirm
+            
+            if [[ "$confirm" == "y" ]] || [[ "$confirm" == "Y" ]]; then
+                execute_delete "$filepath"
+            else
+                echo "已取消"
+            fi
+            return 0
+        else
+            echo -e "${RED}无效的选择${NC}"
+            return 1
+        fi
     fi
     
     local result=$(find_note "$title" false)
@@ -368,26 +418,28 @@ delete_note() {
     fi
     
     if [[ $exit_code -eq 2 ]]; then
-        # 多个匹配
+        # 多个匹配，使用交互式选择
         echo -e "${YELLOW}找到多个匹配的笔记:${NC}"
         echo
         
-        local i=1
-        while IFS= read -r filepath; do
-            local basename=$(basename "$filepath" .md)
-            local dir=$(dirname "$filepath" | sed "s|${VAULT_PATH}/||")
-            local lines=$(wc -l < "$filepath")
-            
-            echo "  [$i] $basename"
-            echo "      位置: $dir/"
-            echo "      大小: $lines 行"
-            echo
-            
-            ((i++))
-        done <<< "$result"
+        local selected=$(interactive_select "$result" "请选择要删除的笔记")
+        if [[ $? -ne 0 ]]; then
+            echo "已取消"
+            return 0
+        fi
         
-        echo "请回复要删除的笔记编号 (或 0 取消):"
-        echo "MULTI_DELETE_CONFIRM:$result"
+        local filepath="$selected"
+        local basename=$(basename "$filepath" .md)
+        
+        echo
+        echo -e "${YELLOW}即将删除笔记: $basename${NC}"
+        read -p "确认删除? (y/N): " confirm
+        
+        if [[ "$confirm" == "y" ]] || [[ "$confirm" == "Y" ]]; then
+            execute_delete "$filepath"
+        else
+            echo "已取消"
+        fi
         return 0
     fi
 }
@@ -419,13 +471,68 @@ execute_delete() {
     fi
 }
 
+# 交互式选择笔记
+interactive_select() {
+    local items="$1"
+    local prompt="${2:-请选择}"
+    
+    if [[ -z "$items" ]]; then
+        return 1
+    fi
+    
+    local count=$(echo "$items" | wc -l)
+    
+    if [[ $count -eq 1 ]]; then
+        echo "$items"
+        return 0
+    fi
+    
+    # 显示列表
+    echo -e "${YELLOW}${prompt}:${NC}"
+    echo "$items" | sed "s|${VAULT_PATH}/||" | nl
+    echo
+    
+    # 读取用户选择
+    read -p "请输入编号 (1-$count, 0取消): " selection
+    
+    if [[ "$selection" == "0" ]] || [[ -z "$selection" ]]; then
+        return 1
+    fi
+    
+    if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -le $count ]]; then
+        echo "$items" | sed -n "${selection}p"
+        return 0
+    else
+        echo -e "${RED}无效的选择${NC}" >&2
+        return 1
+    fi
+}
+
 # 查看笔记内容
 view_note() {
     local title="$1"
     
+    # 如果没有提供标题，列出所有笔记供选择
     if [[ -z "$title" ]]; then
-        echo -e "${RED}错误: 需要提供笔记标题${NC}"
-        return 1
+        local all_notes=$(find "$VAULT_PATH" -name "*.md" -type f 2>/dev/null | sort)
+        if [[ -z "$all_notes" ]]; then
+            echo -e "${RED}仓库中没有笔记${NC}"
+            return 1
+        fi
+        
+        local selected=$(interactive_select "$all_notes" "请选择要查看的笔记")
+        if [[ $? -ne 0 ]]; then
+            echo "已取消"
+            return 0
+        fi
+        
+        local filepath="$selected"
+        local basename=$(basename "$filepath")
+        
+        echo -e "${GREEN}=== $basename ===${NC}"
+        echo
+        cat "$filepath"
+        return 0
     fi
     
     local result=$(find_note "$title" false)
@@ -437,10 +544,20 @@ view_note() {
     fi
     
     if [[ $exit_code -eq 2 ]]; then
-        # 多个匹配
-        echo -e "${YELLOW}找到多个匹配的笔记，请指定更精确的标题:${NC}"
-        echo "$result" | sed "s|${VAULT_PATH}/||" | nl
-        return 1
+        # 多个匹配，使用交互式选择
+        local selected=$(interactive_select "$result" "找到多个匹配的笔记")
+        if [[ $? -ne 0 ]]; then
+            echo "已取消"
+            return 0
+        fi
+        
+        local filepath="$selected"
+        local basename=$(basename "$filepath")
+        
+        echo -e "${GREEN}=== $basename ===${NC}"
+        echo
+        cat "$filepath"
+        return 0
     fi
     
     local filepath="$result"
@@ -789,109 +906,111 @@ save_content() {
     echo "  路径: $filepath"
 }
 
-# 解析自然语言指令
-# 支持的格式: obs创建笔记, obs 创建笔记, obs-创建笔记, OBS创建笔记 等
-# 也支持斜杠命令: /obs-create, /obs-delete, /obs-search 等
-parse_command() {
+# 移除 obs 前缀
+# 支持格式: obs指令, obs 指令, obs-指令, OBS指令 等
+remove_obs_prefix() {
     local input="$1"
+    local lower_input=$(echo "$input" | tr '[:upper:]' '[:lower:]')
     
-    # 检查是否以斜杠命令开头（/obs-xxx 或 /obsidian-headless）
-    if [[ "$input" == /obs-* ]] || [[ "$input" == /obsidian-headless* ]]; then
-        # 处理斜杠命令
-        local cmd=$(echo "$input" | awk '{print $1}')
-        local args=$(echo "$input" | cut -d' ' -f2-)
-        
-        case "$cmd" in
-            /obsidian-headless)
-                # 主命令，需要解析子命令
-                local subcmd=$(echo "$args" | awk '{print $1}')
-                local subargs=$(echo "$args" | cut -d' ' -f2-)
-                
-                case "$subcmd" in
-                    create)
-                        local title=$(echo "$subargs" | awk '{print $1}')
-                        local content=$(echo "$subargs" | cut -d' ' -f2-)
-                        create_note "$title" "$content"
-                        ;;
-                    delete)
-                        delete_note "$subargs"
-                        ;;
-                    search)
-                        search_content "$subargs"
-                        ;;
-                    daily)
-                        daily_note "$subargs"
-                        ;;
-                    list)
-                        list_all
-                        ;;
-                    save)
-                        local target=$(echo "$subargs" | awk '{print $1}')
-                        local content=$(echo "$subargs" | cut -d' ' -f2-)
-                        if [[ -n "$content" ]]; then
-                            save_content "$target" "$content"
-                        else
-                            save_conversation "$target"
-                        fi
-                        ;;
-                    *)
-                        printf '%b错误: 未知子命令 "%s"%b\n' "$RED" "$subcmd" "$NC" >&2
-                        printf '可用子命令: create, delete, search, daily, list, save\n' >&2
-                        return 1
-                        ;;
-                esac
-                return 0
-                ;;
-            /obs-create)
-                local title=$(echo "$args" | awk '{print $1}')
-                local content=$(echo "$args" | cut -d' ' -f2-)
-                create_note "$title" "$content"
-                return 0
-                ;;
-            /obs-delete)
-                delete_note "$args"
-                return 0
-                ;;
-            /obs-search)
-                search_content "$args"
-                return 0
-                ;;
-            /obs-daily)
-                daily_note "$args"
-                return 0
-                ;;
-            /obs-list)
-                list_all
-                return 0
-                ;;
-            /obs-save)
-                local target=$(echo "$args" | awk '{print $1}')
-                local content=$(echo "$args" | cut -d' ' -f2-)
-                if [[ -n "$content" ]]; then
-                    save_content "$target" "$content"
-                else
-                    save_conversation "$target"
-                fi
-                return 0
-                ;;
-        esac
-    fi
-    
-    # 检查是否以 obs 开头（大小写不敏感）
-    # 支持格式: obs指令, obs 指令, obs-指令, OBS指令 等
-    local lower_input_check=$(echo "$input" | tr '[:upper:]' '[:lower:]')
-    
-    if [[ "$lower_input_check" == obs* ]]; then
+    if [[ "$lower_input" == obs* ]]; then
         # 去除 obs 前缀（3个字符）
         local clean_input="${input:3}"
         # 去除后续的各种连接符（空格、-、_、: 等）
-        # 注意：- 必须放在字符类开头或结尾
         while [[ "$clean_input" =~ ^[-[:space:]_\:\/] ]]; do
             clean_input="${clean_input:1}"
         done
-        input="$clean_input"
+        echo "$clean_input"
+    else
+        echo "$input"
     fi
+}
+
+# 解析斜杠命令
+parse_slash_command() {
+    local cmd="$1"
+    local args="$2"
     
+    case "$cmd" in
+        /obsidian-headless)
+            local subcmd=$(echo "$args" | awk '{print $1}')
+            local subargs=$(echo "$args" | cut -d' ' -f2-)
+            
+            case "$subcmd" in
+                create)
+                    local title=$(echo "$subargs" | awk '{print $1}')
+                    local content=$(echo "$subargs" | cut -d' ' -f2-)
+                    create_note "$title" "$content"
+                    ;;
+                delete)
+                    delete_note "$subargs"
+                    ;;
+                search)
+                    search_content "$subargs"
+                    ;;
+                daily)
+                    daily_note "$subargs"
+                    ;;
+                list)
+                    list_all
+                    ;;
+                save)
+                    local target=$(echo "$subargs" | awk '{print $1}')
+                    local content=$(echo "$subargs" | cut -d' ' -f2-)
+                    if [[ -n "$content" ]]; then
+                        save_content "$target" "$content"
+                    else
+                        save_conversation "$target"
+                    fi
+                    ;;
+                *)
+                    printf '%b错误: 未知子命令 "%s"%b\n' "$RED" "$subcmd" "$NC" >&2
+                    printf '可用子命令: create, delete, search, daily, list, save\n' >&2
+                    return 1
+                    ;;
+            esac
+            return 0
+            ;;
+        /obs-create)
+            local title=$(echo "$args" | awk '{print $1}')
+            local content=$(echo "$args" | cut -d' ' -f2-)
+            create_note "$title" "$content"
+            return 0
+            ;;
+        /obs-delete)
+            delete_note "$args"
+            return 0
+            ;;
+        /obs-search)
+            search_content "$args"
+            return 0
+            ;;
+        /obs-daily)
+            daily_note "$args"
+            return 0
+            ;;
+        /obs-list)
+            list_all
+            return 0
+            ;;
+        /obs-save)
+            local target=$(echo "$args" | awk '{print $1}')
+            local content=$(echo "$args" | cut -d' ' -f2-)
+            if [[ -n "$content" ]]; then
+                save_content "$target" "$content"
+            else
+                save_conversation "$target"
+            fi
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# 解析自然语言命令
+parse_natural_command() {
+    local input="$1"
     local lower_input=$(echo "$input" | tr '[:upper:]' '[:lower:]')
     
     case "$lower_input" in
@@ -902,37 +1021,7 @@ parse_command() {
             
         # 创建笔记
         创建笔记*|新建笔记*|添加笔记*)
-            # 提取 "笔记" 之后的所有内容
-            local rest="${input#*笔记}"
-            # 去除开头的空格和换行
-            rest=$(echo "$rest" | sed 's/^[[:space:]]*//')
-            
-            # 获取第一行
-            local first_line=$(echo "$rest" | head -1)
-            # 从第一行提取文件名（第一个空格或换行前的内容）
-            local title=$(echo "$first_line" | awk '{print $1}')
-            
-            # 获取文件名之后的所有内容
-            local content=""
-            # 获取第一行中文件名之后的内容（如果有空格）
-            local first_line_after_title=$(echo "$first_line" | cut -s -d' ' -f2-)
-            # 获取后续所有行
-            local other_lines=$(echo "$rest" | tail -n +2)
-            
-            # 合并内容
-            if [[ -n "$first_line_after_title" && -n "$other_lines" ]]; then
-                # 第一行有内容，且还有后续行
-                content="${first_line_after_title}
-${other_lines}"
-            elif [[ -n "$first_line_after_title" ]]; then
-                # 只有第一行有内容
-                content="$first_line_after_title"
-            elif [[ -n "$other_lines" ]]; then
-                # 第一行只有文件名，内容在后续行
-                content="$other_lines"
-            fi
-            
-            create_note "$title" "$content"
+            parse_create_note "$input"
             ;;
             
         # 删除笔记
@@ -995,23 +1084,7 @@ ${other_lines}"
             
         # 保存对话内容
         保存对话*|转存对话*|保存内容*|转存内容*)
-            local rest="${input#*对话}"
-            rest=$(echo "$rest" | sed 's/^[[:space:]]*//')
-            # 如果还有"内容"字样，也去掉
-            rest=$(echo "$rest" | sed 's/^内容//;s/^[[:space:]]*//')
-            
-            # 获取文件名（第一个词）
-            local target_file=$(echo "$rest" | awk '{print $1}')
-            # 获取内容（文件名之后的所有内容）
-            local content=$(echo "$rest" | cut -d' ' -f2-)
-            
-            if [[ -n "$content" ]]; then
-                # 如果提供了内容，使用 save_content
-                save_content "$target_file" "$content"
-            else
-                # 如果没有提供内容，使用 save_conversation 从内存读取
-                save_conversation "$target_file"
-            fi
+            parse_save_content "$input"
             ;;
             
         # 修改库路径
@@ -1032,6 +1105,87 @@ ${other_lines}"
             return 1
             ;;
     esac
+}
+
+# 解析创建笔记命令
+parse_create_note() {
+    local input="$1"
+    
+    # 提取 "笔记" 之后的所有内容
+    local rest="${input#*笔记}"
+    # 去除开头的空格和换行
+    rest=$(echo "$rest" | sed 's/^[[:space:]]*//')
+    
+    # 获取第一行
+    local first_line=$(echo "$rest" | head -1)
+    # 从第一行提取文件名（第一个空格或换行前的内容）
+    local title=$(echo "$first_line" | awk '{print $1}')
+    
+    # 获取文件名之后的所有内容
+    local content=""
+    # 获取第一行中文件名之后的内容（如果有空格）
+    local first_line_after_title=$(echo "$first_line" | cut -s -d' ' -f2-)
+    # 获取后续所有行
+    local other_lines=$(echo "$rest" | tail -n +2)
+    
+    # 合并内容
+    if [[ -n "$first_line_after_title" && -n "$other_lines" ]]; then
+        # 第一行有内容，且还有后续行
+        content="${first_line_after_title}
+${other_lines}"
+    elif [[ -n "$first_line_after_title" ]]; then
+        # 只有第一行有内容
+        content="$first_line_after_title"
+    elif [[ -n "$other_lines" ]]; then
+        # 第一行只有文件名，内容在后续行
+        content="$other_lines"
+    fi
+    
+    create_note "$title" "$content"
+}
+
+# 解析保存内容命令
+parse_save_content() {
+    local input="$1"
+    
+    local rest="${input#*对话}"
+    rest=$(echo "$rest" | sed 's/^[[:space:]]*//')
+    # 如果还有"内容"字样，也去掉
+    rest=$(echo "$rest" | sed 's/^内容//;s/^[[:space:]]*//')
+    
+    # 获取文件名（第一个词）
+    local target_file=$(echo "$rest" | awk '{print $1}')
+    # 获取内容（文件名之后的所有内容）
+    local content=$(echo "$rest" | cut -d' ' -f2-)
+    
+    if [[ -n "$content" ]]; then
+        # 如果提供了内容，使用 save_content
+        save_content "$target_file" "$content"
+    else
+        # 如果没有提供内容，使用 save_conversation 从内存读取
+        save_conversation "$target_file"
+    fi
+}
+
+# 主命令解析器
+parse_command() {
+    local input="$1"
+    
+    # 检查是否以斜杠命令开头
+    if [[ "$input" == /obs-* ]] || [[ "$input" == /obsidian-headless* ]]; then
+        local cmd=$(echo "$input" | awk '{print $1}')
+        local args=$(echo "$input" | cut -d' ' -f2-)
+        
+        if parse_slash_command "$cmd" "$args"; then
+            return 0
+        fi
+    fi
+    
+    # 移除 obs 前缀（如果存在）
+    input=$(remove_obs_prefix "$input")
+    
+    # 解析自然语言命令
+    parse_natural_command "$input"
 }
 
 # 主程序
