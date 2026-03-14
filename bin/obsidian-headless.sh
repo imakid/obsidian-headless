@@ -138,10 +138,38 @@ validate_path_in_vault() {
     local abs_filepath
     local abs_vault
     
-    abs_filepath=$(realpath -m "$filepath" 2>/dev/null || echo "$filepath")
-    abs_vault=$(realpath "$VAULT_PATH" 2>/dev/null || echo "$VAULT_PATH")
+    # 获取仓库的绝对路径（必须存在）
+    abs_vault=$(realpath "$VAULT_PATH") || {
+        printf '%b错误: 无法获取仓库路径%b\n' "$RED" "$NC" >&2
+        return 1
+    }
     
-    if [[ "$abs_filepath" != "$abs_vault"* ]]; then
+    # 对于已存在的路径，使用 realpath 获取绝对路径
+    # 对于不存在的路径（新文件），手动构建绝对路径
+    if [[ -e "$filepath" ]]; then
+        abs_filepath=$(realpath "$filepath") || {
+            printf '%b错误: 无法获取文件路径%b\n' "$RED" "$NC" >&2
+            return 1
+        }
+    else
+        # 新文件：获取目录的绝对路径并拼接文件名
+        local dirpath=$(dirname "$filepath")
+        local filename=$(basename "$filepath")
+        
+        if [[ -d "$dirpath" ]]; then
+            local abs_dir=$(realpath "$dirpath") || {
+                printf '%b错误: 无法获取目录路径%b\n' "$RED" "$NC" >&2
+                return 1
+            }
+            abs_filepath="${abs_dir}/${filename}"
+        else
+            # 目录不存在，假设在仓库根目录
+            abs_filepath="${abs_vault}/${filename}"
+        fi
+    fi
+    
+    # 严格检查：路径必须以仓库路径开头并跟随斜杠
+    if [[ "$abs_filepath" != "$abs_vault/"* && "$abs_filepath" != "$abs_vault" ]]; then
         printf '%b错误: 文件路径必须在仓库内%b\n' "$RED" "$NC" >&2
         return 1
     fi
@@ -448,63 +476,67 @@ search_titles() {
 # 搜索内容
 search_content() {
     local keyword="$1"
-    
+
     if [[ -z "$keyword" ]]; then
         echo -e "${RED}错误: 需要提供搜索关键词${NC}"
         return 1
     fi
-    
+
     echo -e "${GREEN}搜索内容包含 '$keyword' 的笔记:${NC}"
     echo
-    
+
     local results
     if command -v rg &>/dev/null; then
-        results=$(rg -i "$keyword" "$VAULT_PATH" -t md -l 2>/dev/null)
+        # 使用 -- 分隔符防止关键字被解释为选项
+        results=$(rg -i -- "$keyword" "$VAULT_PATH" -t md -l 2>/dev/null)
     else
-        results=$(grep -ril "$keyword" "$VAULT_PATH" --include="*.md" 2>/dev/null)
+        # 使用 -- 分隔符防止关键字被解释为选项
+        results=$(grep -ril -- "$keyword" "$VAULT_PATH" --include="*.md" 2>/dev/null)
     fi
-    
+
     if [[ -z "$results" ]]; then
         echo "  (未找到匹配)"
         return 0
     fi
-    
+
     echo "$results" | sed "s|${VAULT_PATH}/||" | nl
 }
 
 # 模糊搜索（标题+内容）
 fuzzy_search() {
     local keyword="$1"
-    
+
     if [[ -z "$keyword" ]]; then
         echo -e "${RED}错误: 需要提供搜索关键词${NC}"
         return 1
     fi
-    
+
     echo -e "${GREEN}模糊搜索 '$keyword':${NC}"
     echo
-    
+
     # 标题匹配
     echo -e "${YELLOW}--- 标题匹配 ---${NC}"
     local title_results=$(find "$VAULT_PATH" -iname "*${keyword}*" -name "*.md" -type f 2>/dev/null | head -10)
-    
+
     if [[ -z "$title_results" ]]; then
         echo "  (无)"
     else
         echo "$title_results" | sed "s|${VAULT_PATH}/||" | nl
     fi
-    
+
     echo
-    
+
     # 内容匹配
     echo -e "${YELLOW}--- 内容匹配 ---${NC}"
     local content_results
     if command -v rg &>/dev/null; then
-        content_results=$(rg -i "$keyword" "$VAULT_PATH" -t md -l 2>/dev/null | head -10)
+        # 使用 -- 分隔符防止关键字被解释为选项
+        content_results=$(rg -i -- "$keyword" "$VAULT_PATH" -t md -l 2>/dev/null | head -10)
     else
-        content_results=$(grep -ril "$keyword" "$VAULT_PATH" --include="*.md" 2>/dev/null | head -10)
+        # 使用 -- 分隔符防止关键字被解释为选项
+        content_results=$(grep -ril -- "$keyword" "$VAULT_PATH" --include="*.md" 2>/dev/null | head -10)
     fi
-    
+
     if [[ -z "$content_results" ]]; then
         echo "  (无)"
     else
