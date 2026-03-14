@@ -13,6 +13,7 @@
 - **无显示器环境**（VPS、Docker、NAS）需要使用 Obsidian？
 - 不想每次都**启动 Obsidian GUI** 桌面应用？
 - 希望通过**自然语言**而不是复杂命令来管理笔记？
+- 其实主要是想在openclaw上用
 
 **Obsidian Headless** 就是为解决这些场景而生的工具。
 
